@@ -1,2 +1,1 @@
-# ocr
-PDF to text
+https://nomsams.github.io/ocr/
