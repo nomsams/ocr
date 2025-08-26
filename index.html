@@ -1,0 +1,526 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>PDF → OCR Text (Client-Side, Accurate + Cancel)</title>
+<style>
+  :root {
+    --gap: 12px; --pad: 14px; --radius: 10px;
+    --muted:#6b7280; --fg:#111827; --bg:#f9fafb; --accent:#2563eb; --danger:#dc2626; --ok:#059669; --border:#e5e7eb;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    --sans: Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji";
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:var(--sans);color:var(--fg);background:var(--bg);line-height:1.45}
+  header,main,footer{max-width:980px;margin:0 auto;padding:clamp(12px,2.5vw,20px)}
+  header h1{margin:4px 0 0 0;font-size:clamp(18px,4vw,24px)}
+  header p{margin:4px 0;color:var(--muted)}
+  .card{background:#fff;border:1px solid var(--border);border-radius:var(--radius);padding:var(--pad);box-shadow:0 1px 0 rgba(0,0,0,.02)}
+  .row{display:flex;flex-wrap:wrap;gap:var(--gap);align-items:center}
+  .col{flex:1 1 220px}
+  .controls{display:grid;gap:var(--gap)}
+  .group{display:grid;gap:6px}
+  label{font-weight:600}
+  input[type="file"]{display:none}
+  .btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;padding:10px 14px;border-radius:8px;border:1px solid var(--border);background:#fff;font-weight:600;cursor:pointer;transition:box-shadow .15s ease, transform .02s ease;user-select:none}
+  .btn:hover{box-shadow:0 1px 8px rgba(0,0,0,.04)}
+  .btn:active{transform:translateY(1px)}
+  .btn.primary{background:var(--accent);color:#fff;border-color:var(--accent)}
+  .btn.danger{background:var(--danger);color:#fff;border-color:var(--danger)}
+  .btn[disabled]{opacity:.5;cursor:not-allowed}
+  .hint{color:var(--muted);font-size:12px}
+  .checkboxes{display:inline-flex;gap:10px;flex-wrap:wrap}
+  .checkboxes label{font-weight:500}
+  .rangeRow{display:grid;grid-template-columns:1fr auto;gap:8px;align-items:center}
+  input[type="text"], textarea{width:100%;border:1px solid var(--border);border-radius:8px;padding:10px 12px;font:inherit}
+  textarea{min-height:300px;resize:vertical;font-family:var(--mono);white-space:pre-wrap}
+  .progressRow{display:grid;gap:8px}
+  progress{width:100%;height:16px;border:1px solid var(--border);border-radius:999px;overflow:hidden}
+  .status{display:flex;justify-content:space-between;color:var(--muted);font-size:13px}
+  details.error{margin-top:10px;border:1px dashed var(--danger);border-radius:8px;padding:8px 10px;background:#fff5f5}
+  summary{cursor:pointer;font-weight:600}
+  footer{color:var(--muted);font-size:12px;text-align:center}
+  .chips{display:inline-flex;gap:6px;flex-wrap:wrap}
+  .chip{background:#eef2ff;color:#3730a3;border-radius:999px;padding:2px 8px;font-size:12px}
+</style>
+</head>
+<body>
+<header>
+  <h1>PDF → OCR Text (Client-Side)</h1>
+  <p>Hybrid accuracy: uses embedded text when available, OCRs scanned pages. Fully in your browser.</p>
+  <div class="chips">
+    <span class="chip">No server</span><span class="chip">pdf.js</span><span class="chip">Tesseract.js v2</span><span class="chip">Cancel</span><span class="chip">ENG/SWE/ITA/DEU</span>
+  </div>
+</header>
+
+<main class="card">
+  <div class="controls">
+    <div class="row">
+      <div class="col">
+        <input id="fileInput" type="file" accept="application/pdf" />
+        <button id="btnUpload" class="btn" type="button">📄 Upload PDF</button>
+        <span id="fileName" class="hint"></span>
+      </div>
+      <div class="col" style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end">
+        <button id="btnStart" class="btn primary" type="button" disabled>▶️ Start OCR</button>
+        <button id="btnCancel" class="btn danger" type="button" disabled>⛔ Cancel</button>
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="col group">
+        <label for="dpi">DPI (accuracy vs. speed): <span id="dpiVal">300</span></label>
+        <input id="dpi" type="range" min="100" max="300" step="10" value="300" />
+        <span class="hint">Higher DPI improves accuracy but is slower and uses more memory.</span>
+      </div>
+
+      <div class="col group">
+        <label>Languages (select one or more)</label>
+        <div class="checkboxes" id="langBox">
+          <label><input type="checkbox" value="eng" checked> English</label>
+          <label><input type="checkbox" value="swe"> Svenska</label>
+          <label><input type="checkbox" value="ita"> Italiano</label>
+          <label><input type="checkbox" value="deu"> Deutsch</label>
+        </div>
+        <span class="hint">Combined selection runs OCR with e.g. <code>eng+swe</code>.</span>
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="col group">
+        <label class="inline">
+          <input type="checkbox" id="chkRange"> OCR only specific pages
+        </label>
+        <div class="rangeRow">
+          <input id="range" type="text" placeholder="e.g., 1-3,5,10-12" disabled/>
+          <span class="hint">Leave off to OCR all pages.</span>
+        </div>
+      </div>
+
+      <div class="col group">
+        <label class="inline">
+          <input type="checkbox" id="chkMarkers" checked> Add START/END markers (recommended)
+        </label>
+        <span class="hint">Adds <code>&lt;&lt;&lt;--- OCR: START/END OF DOCUMENT ---&gt;&gt;&gt;</code> and a final sentence.</span>
+      </div>
+    </div>
+
+    <div class="progressRow">
+      <progress id="progress" value="0" max="100" aria-label="OCR progress"></progress>
+      <div class="status">
+        <span id="status">Waiting for PDF…</span>
+        <span id="pct">0%</span>
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="col">
+        <label for="output">OCR Output</label>
+        <textarea id="output" placeholder="OCR result will appear here…" spellcheck="false"></textarea>
+        <div class="row" style="margin-top:8px;justify-content:flex-start">
+          <button id="btnCopy" class="btn" type="button" disabled>📋 Copy to clipboard</button>
+          <button id="btnDownload" class="btn" type="button" disabled>⬇️ Download .txt</button>
+          <span id="copyInfo" class="hint"></span>
+        </div>
+        <details id="errorBox" class="error" hidden>
+          <summary>There were errors (click to expand)</summary>
+          <pre id="errorLog" style="white-space:pre-wrap;font-family:var(--mono);font-size:12px;"></pre>
+          <button id="btnCopyErr" class="btn" type="button">Copy error report</button>
+        </details>
+      </div>
+    </div>
+  </div>
+</main>
+
+<footer>
+  Built with pdf.js & Tesseract.js · All processing happens locally in your browser · © <script>document.write(new Date().getFullYear())</script>
+</footer>
+
+<!-- pdf.js (global pdfjsLib) -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
+<script>
+  // ensure worker path is set for CDN use
+  if (window.pdfjsLib) {
+    pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js";
+  }
+</script>
+<!-- Tesseract.js v2 (more compatible in restricted environments) -->
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@2.1.5/dist/tesseract.min.js"></script>
+
+<script>
+(function(){
+  'use strict';
+
+  // Elements
+  const fileInput = document.getElementById('fileInput');
+  const btnUpload = document.getElementById('btnUpload');
+  const btnStart = document.getElementById('btnStart');
+  const btnCancel = document.getElementById('btnCancel');
+  const btnCopy = document.getElementById('btnCopy');
+  const btnDownload = document.getElementById('btnDownload');
+  const btnCopyErr = document.getElementById('btnCopyErr');
+
+  const fileName = document.getElementById('fileName');
+  const dpi = document.getElementById('dpi');
+  const dpiVal = document.getElementById('dpiVal');
+  const chkRange = document.getElementById('chkRange');
+  const rangeInput = document.getElementById('range');
+  const chkMarkers = document.getElementById('chkMarkers');
+  const progressEl = document.getElementById('progress');
+  const statusEl = document.getElementById('status');
+  const pctEl = document.getElementById('pct');
+  const output = document.getElementById('output');
+  const errorBox = document.getElementById('errorBox');
+  const errorLog = document.getElementById('errorLog');
+  const copyInfo = document.getElementById('copyInfo');
+
+  // State
+  let pdfDoc = null;
+  let currentFile = null;
+  let errors = [];
+  let aborted = false;
+  let worker = null; // Tesseract worker
+
+  // UI wiring
+  btnUpload.addEventListener('click', () => fileInput.click());
+  fileInput.addEventListener('change', onFileSelected);
+  btnStart.addEventListener('click', startOCR);
+  btnCancel.addEventListener('click', cancelOCR);
+  btnCopy.addEventListener('click', copyToClipboard);
+  btnDownload.addEventListener('click', downloadTxt);
+  btnCopyErr.addEventListener('click', copyErrorReport);
+  chkRange.addEventListener('change', () => { rangeInput.disabled = !chkRange.checked; if(!chkRange.checked) rangeInput.value=''; });
+  dpi.addEventListener('input', () => { dpiVal.textContent = dpi.value; });
+
+  window.addEventListener('load', () => {
+    if (!window.pdfjsLib) setStatus('Failed to load pdf.js. Check your network / CDN.', 0);
+    else setStatus('Ready. Upload a PDF to begin.', 0);
+  });
+
+  function setStatus(msg, pct = null) {
+    statusEl.textContent = msg;
+    if (pct !== null) {
+      const v = Math.max(0, Math.min(100, Math.round(pct)));
+      progressEl.value = v;
+      pctEl.textContent = v + '%';
+    }
+  }
+
+  async function onFileSelected() {
+    resetErrors();
+    output.value = '';
+    copyInfo.textContent = '';
+    const file = fileInput.files && fileInput.files[0];
+    if (!file) {
+      fileName.textContent = '';
+      btnStart.disabled = true;
+      setStatus('No file selected.');
+      return;
+    }
+    const isPdf = /\.pdf$/i.test(file.name) || file.type === 'application/pdf';
+    if (!isPdf) {
+      toast('Please select a PDF file.', true);
+      btnStart.disabled = true;
+      fileName.textContent = '';
+      setStatus('Invalid file type.', 0);
+      return;
+    }
+    currentFile = file;
+    fileName.textContent = `${file.name} (${formatBytes(file.size)})`;
+    btnStart.disabled = false;
+    setStatus('PDF selected. Ready to start.');
+  }
+
+  async function startOCR() {
+    if (!currentFile) { toast('Select a PDF first.', true); return; }
+    if (!window.pdfjsLib) { toast('pdf.js not available. Check CDN/network.', true); return; }
+    if (!window.Tesseract) { toast('Tesseract.js not available. Check CDN/network.', true); return; }
+
+    const langs = getSelectedLanguages();
+    if (langs.length === 0) { toast('Select at least one language (ENG/SWE/ITA/DEU).', true); return; }
+    const langStr = langs.join('+');
+
+    // Prepare UI / state
+    aborted = false;
+    disableControls(true);
+    btnCancel.disabled = false;
+    setStatus('Loading PDF…', 1); progressEl.value = 1; pctEl.textContent = '1%';
+
+    let pageList = null;
+    let numPages = 0;
+
+    try {
+      const buf = await currentFile.arrayBuffer();
+      pdfDoc = await pdfjsLib.getDocument({ data: buf }).promise;
+      numPages = pdfDoc.numPages;
+
+      warnIfLarge(currentFile.size, numPages);
+
+      if (chkRange.checked && rangeInput.value.trim()) {
+        pageList = parsePageRange(rangeInput.value.trim(), numPages);
+      } else {
+        pageList = Array.from({length: numPages}, (_, i) => i + 1);
+      }
+    } catch (err) {
+      recordError('Failed to open PDF', err);
+      setStatus('Failed to open PDF.', 0);
+      disableControls(false);
+      return;
+    }
+
+    // Markers
+    const useMarkers = chkMarkers.checked;
+    let result = '';
+    if (useMarkers) result += '<<<--- OCR: START OF DOCUMENT --->>>\n\n';
+
+    // Prepare Tesseract worker (lazy init – only if needed)
+    const dpiValNum = parseInt(dpi.value, 10);
+    const scale = dpiValNum / 72;
+
+    // Main loop
+    const total = pageList.length;
+    for (let idx = 0; idx < total; idx++) {
+      if (aborted) break;
+      const pageNum = pageList[idx];
+      try {
+        // First, try embedded text (more accurate for digital PDFs)
+        setStatus(`Reading embedded text on page ${pageNum}/${pdfDoc.numPages}…`, (idx / total) * 100);
+        const page = await pdfDoc.getPage(pageNum);
+        const embeddedText = await extractEmbeddedText(page);
+
+        let pageText = '';
+        if (hasMeaningfulText(embeddedText)) {
+          pageText = embeddedText;
+        } else {
+          // No good embedded text -> render + OCR
+          if (!worker) {
+            worker = await createTesseractWorker(langStr);
+          } else {
+            // Ensure initialized language; in this simple flow we init once per job.
+          }
+
+          const viewport = page.getViewport({ scale });
+          const canvas = document.createElement('canvas');
+          const ctx = canvas.getContext('2d', { willReadFrequently: true });
+          canvas.width = Math.floor(viewport.width);
+          canvas.height = Math.floor(viewport.height);
+
+          setStatus(`Rendering page ${pageNum}/${pdfDoc.numPages}…`, (idx / total) * 100);
+          const renderTask = page.render({ canvasContext: ctx, viewport });
+          await renderTask.promise;
+
+          setStatus(`Recognizing text on page ${pageNum}/${pdfDoc.numPages}…`, (idx / total) * 100);
+          const { data } = await worker.recognize(canvas, {}, progress => {
+            const base = (idx / total) * 100;
+            const slice = (1 / total) * 100;
+            const p = progress && typeof progress.progress === 'number' ? progress.progress : 0;
+            setStatus(`Recognizing text on page ${pageNum}/${pdfDoc.numPages}… (${Math.round(p*100)}%)`, Math.min(99, base + slice * p));
+          });
+          pageText = (data && data.text) ? data.text : '';
+
+          // Release memory
+          canvas.width = canvas.height = 0;
+        }
+
+        const separator = `\n\n--- Page ${pageNum} ---\n\n`;
+        result += separator + pageText.trim() + '\n';
+
+      } catch (errPage) {
+        recordError(`Page ${pageNum} failed`, errPage);
+        result += `\n\n--- Page ${pageNum} (ERROR) ---\n\n[Text extraction/OCR failed for this page]\n`;
+      }
+    }
+
+    // Cleanup worker
+    if (worker) {
+      try { await worker.terminate(); } catch(_) {}
+      worker = null;
+    }
+
+    if (aborted) {
+      setStatus('Cancelled.', progressEl.value);
+      toast('OCR cancelled.', false);
+    } else {
+      if (useMarkers) {
+        result += `\n<<<--- OCR: END OF DOCUMENT --->>>\nthis is the end of the OCR:ed document\n`;
+      }
+      output.value = result.trim() + '\n';
+      btnCopy.disabled = false;
+      btnDownload.disabled = false;
+      setStatus('Done.', 100);
+      toast('OCR complete ✅', false);
+    }
+
+    if (errors.length) {
+      errorBox.hidden = false;
+      errorLog.textContent = errors.join('\n\n');
+    } else {
+      errorBox.hidden = true;
+    }
+
+    disableControls(false);
+    btnCancel.disabled = true;
+  }
+
+  async function cancelOCR() {
+    aborted = true;
+    btnCancel.disabled = true;
+    setStatus('Cancelling…', progressEl.value);
+    try {
+      if (worker) { await worker.terminate(); }
+    } catch(_) {}
+    worker = null;
+  }
+
+  function disableControls(disabled) {
+    btnStart.disabled = disabled || !currentFile;
+    btnUpload.disabled = disabled;
+    fileInput.disabled = disabled;
+    btnCopy.disabled = disabled || !output.value;
+    btnDownload.disabled = disabled || !output.value;
+    rangeInput.disabled = disabled || !chkRange.checked;
+    document.querySelectorAll('#langBox input[type=checkbox]').forEach(cb => cb.disabled = disabled);
+    dpi.disabled = disabled;
+    chkRange.disabled = disabled;
+    chkMarkers.disabled = disabled;
+  }
+
+  function getSelectedLanguages() {
+    const boxes = Array.from(document.querySelectorAll('#langBox input[type=checkbox]'));
+    return boxes.filter(b => b.checked).map(b => b.value);
+  }
+
+  function formatBytes(bytes) {
+    const units = ['B','KB','MB','GB','TB'];
+    if (!bytes) return '0 B';
+    const i = Math.floor(Math.log(bytes) / Math.log(1024));
+    return (bytes / Math.pow(1024, i)).toFixed(1) + ' ' + units[i];
+  }
+
+  function warnIfLarge(sizeBytes, pages) {
+    const bigFile = sizeBytes > 100 * 1024 * 1024;
+    const manyPages = pages > 100;
+    if (bigFile || manyPages) {
+      toast(`Heads up: ${bigFile ? 'large file' : ''}${bigFile && manyPages ? ' & ' : ''}${manyPages ? ' many pages' : ''}. 300 DPI may be slow.`, false);
+    }
+  }
+
+  function parsePageRange(str, maxPage) {
+    const set = new Set();
+    const parts = str.split(',').map(s => s.trim()).filter(Boolean);
+    if (!parts.length) throw new Error('Empty range');
+    for (const part of parts) {
+      if (/^\d+$/.test(part)) {
+        const n = parseInt(part, 10);
+        if (n < 1 || n > maxPage) throw new Error(`Page ${n} out of bounds (1-${maxPage})`);
+        set.add(n);
+      } else if (/^\d+\s*-\s*\d+$/.test(part)) {
+        let [a,b] = part.split('-').map(s => parseInt(s.trim(),10));
+        if (a > b) [a,b] = [b,a];
+        if (a < 1 || b > maxPage) throw new Error(`Range ${a}-${b} out of bounds (1-${maxPage})`);
+        for (let i=a; i<=b; i++) set.add(i);
+      } else {
+        throw new Error(`Invalid token "${part}"`);
+      }
+    }
+    return Array.from(set).sort((x,y)=>x-y);
+  }
+
+  async function extractEmbeddedText(page) {
+    try {
+      const tc = await page.getTextContent();
+      const items = tc.items || [];
+      const parts = items.map(i => (i && i.str) ? i.str : '');
+      let text = parts.join('\n').trim();
+      text = normalizeWhitespace(text);
+      return text;
+    } catch (e) {
+      recordError('getTextContent failed', e);
+      return '';
+    }
+  }
+
+  function hasMeaningfulText(str) {
+    if (!str) return false;
+    const s = str.replace(/\s+/g,' ').trim();
+    if (s.length < 25) return false;
+    // reject if >85% non-letters (likely junk)
+    const letters = (s.match(/[A-Za-zÅÄÖåäöÉéÈèÜüÖöÄäß]+/g) || []).join('').length;
+    return letters / s.length >= 0.15;
+  }
+
+  function normalizeWhitespace(s) {
+    return (s || '').replace(/\u00A0/g, ' ').replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+  }
+
+  async function createTesseractWorker(langStr) {
+    // v2.1.5 worker with explicit paths for compatibility
+    const w = Tesseract.createWorker({
+      workerPath: 'https://cdn.jsdelivr.net/npm/tesseract.js@2.1.5/dist/worker.min.js',
+      corePath:   'https://cdn.jsdelivr.net/npm/tesseract.js-core@2.2.0/tesseract-core.wasm.js',
+      langPath:   'https://tessdata.projectnaptha.com/4.0.0'
+    });
+    await w.load();
+    await w.loadLanguage(langStr);
+    await w.initialize(langStr);
+    return w;
+  }
+
+  function recordError(title, err) {
+    const stamp = new Date().toISOString();
+    const detail = `${title}\nTime: ${stamp}\nMessage: ${err?.message || err}\nStack:\n${err?.stack || '(no stack)'}\nUA: ${navigator.userAgent}`;
+    errors.push(detail);
+    console.error(detail);
+  }
+  function resetErrors(){ errors = []; errorBox.hidden = true; errorLog.textContent = ''; }
+
+  function copyErrorReport() {
+    const text = errors.length ? errors.join('\n\n') : 'No errors recorded.';
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(text).then(()=>toast('Error report copied.'));
+    } else {
+      const t = document.createElement('textarea');
+      t.value = text; document.body.appendChild(t); t.select(); document.execCommand('copy'); document.body.removeChild(t);
+      toast('Error report copied.');
+    }
+  }
+
+  function copyToClipboard() {
+    const text = output.value || '';
+    if (!text) return;
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(text).then(() => { copyInfo.textContent = 'Copied!'; setTimeout(()=>copyInfo.textContent='',1000); })
+      .catch(()=>fallbackCopy(text));
+    } else fallbackCopy(text);
+  }
+  function fallbackCopy(text) {
+    output.select(); output.setSelectionRange(0, text.length);
+    const ok = document.execCommand('copy');
+    copyInfo.textContent = ok ? 'Copied!' : 'Copy failed';
+    setTimeout(()=>copyInfo.textContent='',1000);
+    output.setSelectionRange(0,0); output.blur();
+  }
+
+  function downloadTxt() {
+    const blob = new Blob([output.value || ''], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    const safeName = (currentFile?.name || 'ocr').replace(/\.pdf$/i,'');
+    a.href = url; a.download = `${safeName}.txt`; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+  }
+
+  function toast(message, isError) {
+    const el = document.createElement('div');
+    el.textContent = message;
+    Object.assign(el.style, {
+      position:'fixed', zIndex:9999, left:'50%', bottom:'24px', transform:'translateX(-50%)',
+      padding:'10px 14px', background: isError ? '#fee2e2' : '#ecfeff', border:'1px solid '+(isError ? '#fca5a5' : '#a5f3fc'),
+      color:'#111827', borderRadius:'10px', boxShadow:'0 2px 12px rgba(0,0,0,0.08)'
+    });
+    document.body.appendChild(el); setTimeout(()=>el.remove(), 2200);
+  }
+})();
+</script>
+</body>
+</html>
